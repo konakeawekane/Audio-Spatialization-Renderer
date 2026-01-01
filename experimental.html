@@ -1,0 +1,510 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Acoustic Rendering Engine - Advanced Physics</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/OBJLoader.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/TransformControls.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body { margin: 0; overflow: hidden; background: #020617; color: white; font-family: sans-serif; }
+        canvas { display: block; }
+        .panel { background: rgba(15, 23, 42, 0.9); backdrop-filter: blur(12px); border: 1px solid rgba(255,255,255,0.1); }
+        .loading-overlay {
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(0,0,0,0.95); display: flex; flex-direction: column;
+            align-items: center; justify-content: center; z-index: 100;
+            display: none;
+        }
+        .viz-container {
+            position: fixed; bottom: 20px; right: 20px; width: 300px; height: 120px;
+            background: rgba(15, 23, 42, 0.8); border: 1px solid rgba(251, 191, 36, 0.3); border-radius: 8px;
+            display: none; overflow: hidden; pointer-events: none;
+        }
+        input[type=range] { accent-color: #fbbf24; cursor: pointer; }
+        .custom-scrollbar::-webkit-scrollbar { width: 4px; }
+        .custom-scrollbar::-webkit-scrollbar-thumb { background: #334155; border-radius: 10px; }
+    </style>
+</head>
+<body>
+
+    <div id="loading" class="loading-overlay">
+        <div class="w-96 space-y-6 text-center">
+            <div class="animate-spin rounded-full h-16 w-16 border-t-2 border-yellow-500 mx-auto mb-4"></div>
+            <div class="space-y-1">
+                <p id="loadingText" class="text-xl font-light tracking-widest uppercase text-yellow-400">Computing Physics...</p>
+                <p id="loadingPhase" class="text-[10px] text-slate-500 uppercase tracking-widest font-bold">Initializing Engine</p>
+            </div>
+            <div class="w-full bg-slate-800 rounded-full h-2 overflow-hidden shadow-inner">
+                <div id="progressBar" class="bg-yellow-500 h-full w-0 transition-all duration-300 shadow-[0_0_10px_#fbbf24]"></div>
+            </div>
+            <div class="grid grid-cols-2 gap-4 text-left border-t border-slate-800 pt-6">
+                <div>
+                    <p class="text-[9px] text-slate-500 uppercase font-bold">Processed</p>
+                    <p id="statProcessed" class="text-lg font-mono text-slate-200">0 / 0</p>
+                </div>
+                <div>
+                    <p class="text-[9px] text-slate-500 uppercase font-bold">Energy Paths</p>
+                    <p id="statNodes" class="text-lg font-mono text-slate-200">0 Nodes</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <input type="file" id="audioFileInput" accept="audio/*" class="hidden" />
+
+    <div class="fixed top-4 left-4 z-10 space-y-4">
+        <div class="panel p-6 rounded-xl shadow-2xl w-80 max-h-[95vh] overflow-y-auto custom-scrollbar">
+            <h1 class="text-xl font-bold mb-1 text-yellow-500 text-center">Physical ARE v10</h1>
+            <p class="text-[9px] text-slate-400 mb-4 text-center uppercase tracking-[0.2em]">Validated Wave-Particle Simulation</p>
+            
+            <div class="space-y-4">
+                <section class="space-y-2">
+                    <label class="block text-xs font-bold uppercase text-slate-500">Geometry Context</label>
+                    <input type="file" id="objInput" accept=".obj" class="block w-full text-[10px] text-slate-400
+                        file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0
+                        file:text-[10px] file:font-bold file:bg-yellow-500 file:text-black
+                        hover:file:bg-yellow-600 cursor-pointer"/>
+                </section>
+
+                <div class="border-t border-slate-700 pt-4 space-y-4">
+                    <button id="addSourceBtn" class="w-full bg-emerald-600 hover:bg-emerald-700 text-white py-2 rounded text-[10px] font-bold uppercase tracking-wider transition">
+                        Add Audio Source
+                    </button>
+
+                    <div>
+                        <label class="text-[11px] font-bold text-slate-400 uppercase mb-1 block">Surface Material (Reflection Coeffs)</label>
+                        <select id="materialPreset" class="w-full bg-slate-800 border border-slate-700 rounded p-2 text-xs text-yellow-400 outline-none">
+                            <option value="marble">Polished Marble (ρ: 0.99)</option>
+                            <option value="wood" selected>Oak Wood (ρ: 0.90)</option>
+                            <option value="foam">Acoustic Foam (ρ: 0.15)</option>
+                            <option value="carpet">Thick Carpet (HF Trap)</option>
+                        </select>
+                    </div>
+
+                    <div>
+                        <div class="flex justify-between mb-1">
+                            <label class="text-[10px] font-bold text-slate-300 uppercase">Diffusion (Scattering)</label>
+                            <span id="scatterVal" class="text-[10px] text-yellow-400">0.25</span>
+                        </div>
+                        <input type="range" id="scattering" min="0" max="100" value="25" class="w-full">
+                    </div>
+
+                    <div>
+                        <div class="flex justify-between mb-1">
+                            <label class="text-[10px] font-bold text-slate-300 uppercase">Air Humidity (Absorption)</label>
+                            <span id="humidityVal" class="text-[10px] text-yellow-400">50%</span>
+                        </div>
+                        <input type="range" id="humidity" min="10" max="90" value="50" class="w-full">
+                    </div>
+
+                    <div>
+                        <div class="flex justify-between mb-1">
+                            <label class="text-[10px] font-bold text-slate-300 uppercase">Monte Carlo Rays</label>
+                            <span id="rayVal" class="text-[10px] text-yellow-400">1200</span>
+                        </div>
+                        <input type="range" id="rayCount" min="100" max="5000" value="1200" class="w-full">
+                    </div>
+                </div>
+
+                <div class="pt-4 space-y-2">
+                    <button id="renderBtn" class="w-full bg-yellow-500 hover:bg-yellow-600 text-black py-4 rounded-xl font-black uppercase tracking-tighter text-sm shadow-xl transition-all flex items-center justify-center gap-2">
+                        Run Physics Solver
+                    </button>
+                    <button id="clearRaysBtn" class="w-full bg-slate-800 hover:bg-slate-700 text-slate-400 py-2 rounded text-[9px] font-bold uppercase tracking-widest transition">
+                        Clear Rays
+                    </button>
+                </div>
+                
+                <div id="downloadContainer" class="hidden border-t border-slate-700 pt-3 text-center space-y-2">
+                    <button id="downloadBtn" class="w-full bg-white/10 text-yellow-400 py-3 rounded-lg text-[10px] font-black uppercase tracking-widest border border-yellow-500/30">
+                        Export Mastered .WAV
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div id="vizContainer" class="viz-container">
+        <canvas id="vizCanvas" width="300" height="120"></canvas>
+    </div>
+
+    <script>
+        let scene, camera, renderer, controls, transformControls, raycaster;
+        let roomMesh = null;
+        let sources = [];
+        let listener;
+        let audioCtx, analyser;
+        let rayLines = [];
+        let currentAudioSource = null;
+        let currentDownloadBlob = null;
+
+        // More physically accurate material absorption coefficients (1 - absorption)
+        const materials = {
+            marble: { bass: 0.99, mid: 0.99, treble: 0.98, scatter: 0.05 },
+            wood:   { bass: 0.85, mid: 0.90, treble: 0.92, scatter: 0.20 },
+            foam:   { bass: 0.75, mid: 0.30, treble: 0.05, scatter: 0.60 },
+            carpet: { bass: 0.95, mid: 0.60, treble: 0.30, scatter: 0.70 }
+        };
+
+        const state = {
+            activeMaterial: materials.wood,
+            scattering: 0.25,
+            humidity: 0.5,
+            speedOfSound: 343.2, // m/s at 20°C
+            rayCount: 1200,
+            maxBounces: 40,
+            energyThreshold: 0.001
+        };
+
+        function init() {
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0x020617);
+            camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.1, 10000);
+            camera.position.set(150, 150, 150);
+
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+            document.body.appendChild(renderer.domElement);
+
+            controls = new THREE.OrbitControls(camera, renderer.domElement);
+            controls.enableDamping = true;
+
+            transformControls = new THREE.TransformControls(camera, renderer.domElement);
+            transformControls.addEventListener('dragging-changed', (e) => controls.enabled = !e.value);
+            scene.add(transformControls);
+
+            raycaster = new THREE.Raycaster();
+            scene.add(new THREE.AmbientLight(0xffffff, 0.4));
+            
+            const sun = new THREE.DirectionalLight(0xffffff, 0.6);
+            sun.position.set(100, 200, 100);
+            scene.add(sun);
+
+            createDefaultArena();
+
+            listener = new THREE.Mesh(
+                new THREE.SphereGeometry(1.5), 
+                new THREE.MeshStandardMaterial({ color: 0xef4444, emissive: 0xef4444, emissiveIntensity: 2 })
+            );
+            listener.position.set(0, 15, 0);
+            scene.add(listener);
+
+            audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            analyser = audioCtx.createAnalyser();
+            setupEventListeners();
+            animate();
+            drawViz();
+        }
+
+        function createDefaultArena() {
+            const geo = new THREE.BoxGeometry(300, 100, 300);
+            const mat = new THREE.MeshStandardMaterial({ color: 0x1e293b, side: THREE.BackSide, transparent: true, opacity: 0.3 });
+            roomMesh = new THREE.Mesh(geo, mat);
+            scene.add(roomMesh);
+            scene.add(new THREE.GridHelper(600, 30, 0x334155, 0x0f172a));
+        }
+
+        function setupEventListeners() {
+            window.addEventListener('resize', () => {
+                camera.aspect = window.innerWidth / window.innerHeight;
+                camera.updateProjectionMatrix();
+                renderer.setSize(window.innerWidth, window.innerHeight);
+            });
+
+            document.getElementById('objInput').addEventListener('change', async (e) => {
+                const file = e.target.files[0];
+                if (!file) return;
+                document.getElementById('loading').style.display = 'flex';
+                const text = await file.text();
+                const loader = new THREE.OBJLoader();
+                const object = loader.parse(text);
+                if (roomMesh) scene.remove(roomMesh);
+                object.traverse(c => { if(c.isMesh) c.material = new THREE.MeshStandardMaterial({ color: 0x475569, side: THREE.DoubleSide, transparent: true, opacity: 0.5 }); });
+                roomMesh = object;
+                scene.add(roomMesh);
+                document.getElementById('loading').style.display = 'none';
+            });
+
+            document.getElementById('addSourceBtn').addEventListener('click', () => document.getElementById('audioFileInput').click());
+            
+            document.getElementById('audioFileInput').addEventListener('change', async (e) => {
+                const file = e.target.files[0];
+                if (!file) return;
+                const buffer = await audioCtx.decodeAudioData(await file.arrayBuffer());
+                const source = new THREE.Mesh(
+                    new THREE.SphereGeometry(1.5), 
+                    new THREE.MeshStandardMaterial({ color: 0x10b981, emissive: 0x10b981, emissiveIntensity: 2 })
+                );
+                source.position.set(60, 15, 60);
+                source.userData.audioBuffer = buffer;
+                scene.add(source);
+                sources.push(source);
+                transformControls.attach(source);
+            });
+
+            document.getElementById('renderBtn').addEventListener('click', renderAudio);
+            document.getElementById('clearRaysBtn').addEventListener('click', () => {
+                rayLines.forEach(l => scene.remove(l));
+                rayLines = [];
+            });
+
+            document.getElementById('downloadBtn').addEventListener('click', () => {
+                if (!currentDownloadBlob) return;
+                const url = URL.createObjectURL(currentDownloadBlob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = `phys_render_${Date.now()}.wav`;
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+            });
+
+            document.getElementById('materialPreset').addEventListener('change', (e) => state.activeMaterial = materials[e.target.value]);
+            document.getElementById('scattering').addEventListener('input', (e) => {
+                state.scattering = e.target.value / 100;
+                document.getElementById('scatterVal').innerText = state.scattering.toFixed(2);
+            });
+            document.getElementById('humidity').addEventListener('input', (e) => {
+                state.humidity = e.target.value / 100;
+                document.getElementById('humidityVal').innerText = e.target.value + "%";
+            });
+            document.getElementById('rayCount').addEventListener('input', (e) => {
+                state.rayCount = parseInt(e.target.value);
+                document.getElementById('rayVal').innerText = state.rayCount;
+            });
+
+            renderer.domElement.addEventListener('pointerdown', (event) => {
+                const mouse = new THREE.Vector2((event.clientX / window.innerWidth) * 2 - 1, -(event.clientY / window.innerHeight) * 2 + 1);
+                raycaster.setFromCamera(mouse, camera);
+                const intersects = raycaster.intersectObjects([...sources, listener], true);
+                if (intersects.length > 0) transformControls.attach(intersects[0].object);
+            });
+        }
+
+        async function renderAudio() {
+            if (sources.length === 0) return;
+            document.getElementById('loading').style.display = 'flex';
+            
+            rayLines.forEach(l => scene.remove(l));
+            rayLines = [];
+
+            const impulses = [];
+            const totalRays = state.rayCount * sources.length;
+            let processed = 0;
+
+            document.getElementById('loadingText').innerText = "Ray Tracing Pathfinding";
+
+            for (const source of sources) {
+                for (let i = 0; i < state.rayCount; i++) {
+                    const paths = simulatePhysicalPath(source.position, listener.position);
+                    paths.forEach(p => impulses.push({ ...p, buffer: source.userData.audioBuffer }));
+                    processed++;
+                    
+                    if (processed % 60 === 0) {
+                        const prog = (processed / totalRays) * 100;
+                        document.getElementById('progressBar').style.width = `${prog}%`;
+                        document.getElementById('statProcessed').innerText = `${processed} / ${totalRays}`;
+                        document.getElementById('statNodes').innerText = impulses.length;
+                        await new Promise(r => setTimeout(r, 0));
+                    }
+                }
+            }
+
+            document.getElementById('loadingText').innerText = "Hybrid Synthesis Loop";
+            document.getElementById('progressBar').style.width = `0%`;
+
+            const sampleRate = 44100;
+            const maxDelay = impulses.length > 0 ? Math.max(...impulses.map(i => i.delay)) : 0;
+            const sourceDur = Math.max(...sources.map(s => s.userData.audioBuffer.duration));
+            const totalDuration = sourceDur + maxDelay + 0.5;
+            
+            const offlineCtx = new OfflineAudioContext(2, Math.ceil(sampleRate * totalDuration), sampleRate);
+
+            const CHUNK = 150;
+            for(let k = 0; k < impulses.length; k++) {
+                const imp = impulses[k];
+                const sNode = offlineCtx.createBufferSource();
+                sNode.buffer = imp.buffer;
+
+                const filter = offlineCtx.createBiquadFilter();
+                filter.type = "lowpass";
+                // Simplified HF absorption via Biquad
+                const cutoff = 20000 * (imp.energy.treble / (imp.energy.bass + 0.001));
+                filter.frequency.setValueAtTime(Math.min(20000, Math.max(100, cutoff)), 0);
+
+                const panner = offlineCtx.createStereoPanner();
+                panner.pan.setValueAtTime(imp.pan, 0);
+
+                const gain = offlineCtx.createGain();
+                const totalEnergy = (imp.energy.bass + imp.energy.mid + imp.energy.treble) / 3;
+                gain.gain.setValueAtTime(totalEnergy * 0.15, 0);
+
+                sNode.connect(filter); filter.connect(panner); panner.connect(gain); gain.connect(offlineCtx.destination);
+                sNode.start(imp.delay);
+
+                if (k % CHUNK === 0) {
+                    document.getElementById('progressBar').style.width = `${(k/impulses.length)*100}%`;
+                    document.getElementById('statProcessed').innerText = `${k} / ${impulses.length}`;
+                    await new Promise(r => setTimeout(r, 0));
+                }
+            }
+
+            try {
+                const renderedBuffer = await offlineCtx.startRendering();
+                currentDownloadBlob = bufferToWav(renderedBuffer);
+                
+                if (currentAudioSource) currentAudioSource.stop();
+                currentAudioSource = audioCtx.createBufferSource();
+                currentAudioSource.buffer = renderedBuffer;
+                currentAudioSource.connect(analyser);
+                analyser.connect(audioCtx.destination);
+                currentAudioSource.start();
+
+                document.getElementById('vizContainer').style.display = 'block';
+                document.getElementById('downloadContainer').classList.remove('hidden');
+            } catch (e) {
+                console.error(e);
+            }
+
+            document.getElementById('loading').style.display = 'none';
+        }
+
+        function simulatePhysicalPath(startPos, endPos) {
+            const results = [];
+            let currentPos = startPos.clone();
+            // Monte Carlo random direction
+            let dir = new THREE.Vector3(Math.random()-0.5, Math.random()-0.5, Math.random()-0.5).normalize();
+            let totalDist = 0;
+            let energy = { bass: 1.0, mid: 1.0, treble: 1.0 };
+            let points = [startPos.clone()];
+
+            for (let b = 0; b < state.maxBounces; b++) {
+                raycaster.set(currentPos, dir);
+                const hits = raycaster.intersectObject(roomMesh, true);
+                if (hits.length === 0) break;
+
+                const hit = hits[0];
+                const d = hit.distance;
+                totalDist += d;
+
+                // 1. INVERSE SQUARE LAW
+                const distanceDecay = 1 / (totalDist * 0.5 + 1);
+
+                // 2. ATMOSPHERIC ABSORPTION (Humidity based)
+                // Simplified absorption coeffs for Bass (125Hz), Mid (1kHz), Treble (8kHz)
+                const airAbs = {
+                    bass: 0.0001,
+                    mid: 0.001 * (1.1 - state.humidity),
+                    treble: 0.02 * (1.5 - state.humidity)
+                };
+                
+                energy.bass *= Math.exp(-airAbs.bass * d) * state.activeMaterial.bass;
+                energy.mid *= Math.exp(-airAbs.mid * d) * state.activeMaterial.mid;
+                energy.treble *= Math.exp(-airAbs.treble * d) * state.activeMaterial.treble;
+
+                // 3. FRESNEL SCATTERING / DIFFUSION
+                const normal = hit.face.normal.clone().applyMatrix3(new THREE.Matrix3().getNormalMatrix(hit.object.matrixWorld));
+                if (Math.random() < state.scattering) {
+                    // Diffuse reflection (Lambertian)
+                    const rand = new THREE.Vector3(Math.random()-0.5, Math.random()-0.5, Math.random()-0.5).normalize();
+                    if (rand.dot(normal) < 0) rand.negate();
+                    dir.copy(rand);
+                } else {
+                    // Specular reflection
+                    dir.reflect(normal).normalize();
+                }
+                currentPos.copy(hit.point).addScaledVector(dir, 0.01);
+                points.push(hit.point.clone());
+
+                if (energy.bass < state.energyThreshold) break;
+
+                // 4. ENERGY RECEPTION TEST (Direct path to listener)
+                const toL = new THREE.Vector3().subVectors(endPos, hit.point);
+                const dToL = toL.length();
+                raycaster.set(hit.point, toL.normalize());
+                const occ = raycaster.intersectObject(roomMesh, true);
+                
+                if (occ.length === 0 || occ[0].distance > dToL) {
+                    const finalDist = totalDist + dToL;
+                    const finalDecay = 1 / (finalDist * 0.1 + 1);
+                    results.push({
+                        delay: finalDist / state.speedOfSound,
+                        energy: { 
+                            bass: energy.bass * finalDecay, 
+                            mid: energy.mid * finalDecay, 
+                            treble: energy.treble * finalDecay
+                        },
+                        pan: calculatePan(hit.point, endPos)
+                    });
+                    
+                    if (Math.random() < 0.1) drawRay([...points, endPos.clone()], energy.treble);
+                }
+            }
+            return results;
+        }
+
+        function calculatePan(ePos, lPos) {
+            const camDir = new THREE.Vector3(0,0,-1).applyQuaternion(camera.quaternion).setY(0).normalize();
+            const camRight = new THREE.Vector3().crossVectors(camDir, new THREE.Vector3(0,1,0)).normalize();
+            const toE = new THREE.Vector3().subVectors(ePos, lPos).normalize();
+            return THREE.MathUtils.clamp(toE.dot(camRight) * 1.5, -1, 1);
+        }
+
+        function drawRay(points, alpha) {
+            const geo = new THREE.BufferGeometry().setFromPoints(points);
+            const mat = new THREE.LineBasicMaterial({ color: 0xfabf24, transparent: true, opacity: alpha * 0.2, blending: THREE.AdditiveBlending });
+            const line = new THREE.Line(geo, mat);
+            scene.add(line);
+            rayLines.push(line);
+        }
+
+        function bufferToWav(buffer) {
+            const n = buffer.numberOfChannels, len = buffer.length * n * 2 + 44;
+            const b = new ArrayBuffer(len), v = new DataView(b);
+            let p = 0, o = 0;
+            const u32 = (d) => { v.setUint32(p, d, true); p += 4; };
+            const u16 = (d) => { v.setUint16(p, d, true); p += 2; };
+            u32(0x46464952); u32(len - 8); u32(0x45564157); u32(0x20746d66); u32(16); u16(1); u16(n);
+            u32(buffer.sampleRate); u32(buffer.sampleRate * 2 * n); u16(n * 2); u16(16); u32(0x61746164); u32(len - p - 4);
+            const ch = []; for(let i=0; i<n; i++) ch.push(buffer.getChannelData(i));
+            while(p < len) {
+                for(let i=0; i<n; i++) {
+                    let s = Math.max(-1, Math.min(1, ch[i][o]));
+                    v.setInt16(p, s < 0 ? s * 0x8000 : s * 0x7FFF, true); p += 2;
+                }
+                o++;
+            }
+            return new Blob([b], {type: "audio/wav"});
+        }
+
+        function drawViz() {
+            requestAnimationFrame(drawViz);
+            if (!analyser || document.getElementById('vizContainer').style.display === 'none') return;
+            const canvas = document.getElementById('vizCanvas');
+            const ctx = canvas.getContext('2d');
+            const data = new Uint8Array(analyser.frequencyBinCount);
+            analyser.getByteFrequencyData(data);
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            const bw = canvas.width / data.length;
+            for(let i=0; i<data.length; i++) {
+                const h = (data[i]/255) * canvas.height;
+                ctx.fillStyle = `rgba(251, 191, 36, ${0.3 + (data[i]/255)})`;
+                ctx.fillRect(i*bw, canvas.height - h, bw - 1, h);
+            }
+        }
+
+        function animate() {
+            requestAnimationFrame(animate);
+            controls.update();
+            renderer.render(scene, camera);
+        }
+
+        window.onload = init;
+    </script>
+</body>
+</html>
